@@ -5,6 +5,7 @@ authors = ["Ian P. Cooke <ipc@informatic.io>"]
 edition = "2018"
 
 [dependencies]
+smol = { version = "0.3", default-features = false, features = ["tokio02"], optional = true }
 tokio = { version = "0.2", default-features = false, optional = true }
 futures = { version = "0.3", default-features = false, optional = true }
 async-std = { version = "1.6", default-features = false, optional = true }
@@ -14,6 +15,7 @@ thiserror = "1.0"
 
 [features]
 default = [ "async-executor-compat" ]
+smol-compat = [ "smol" ]
 tokio-compat = [ "tokio", "tokio/rt-core" ]
 futures-compat = [ "futures" ]
 async-std-compat = [ "async-std" ]

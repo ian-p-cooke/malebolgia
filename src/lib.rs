@@ -10,11 +10,16 @@ use async_executor::Task as AsyncTask;
 #[cfg(feature = "tokio-compat")]
 use tokio::{self, task::JoinHandle as TokioJoinHandle};
 
+#[cfg(feature = "async-executor-compat")]
+use smol::Task as SmolTask;
+
 pub enum Executor {
     #[cfg(feature = "async-executor-compat")]
     AsyncExecutor,
     #[cfg(feature = "tokio-compat")]
     Tokio,
+    #[cfg(feature = "smol-compat")]
+    Smol,
 }
 
 impl Executor {
@@ -30,6 +35,8 @@ pub enum JoinHandle<T> {
     AsyncExecutor(AsyncTask<T>),
     #[cfg(feature = "tokio-compat")]
     Tokio(TokioJoinHandle<T>),
+    #[cfg(feature = "smol-compat")]
+    Smol(SmolTask<T>),
 }
 
 #[derive(Error, Debug)]
@@ -56,6 +63,11 @@ impl<T> Future for JoinHandle<T> {
                 },
                 Poll::Pending => Poll::Pending,
             },
+            #[cfg(feature = "smol-compat")]
+            JoinHandle::Smol(t) => match Pin::new(t).poll(cx) {
+                Poll::Ready(t) => Poll::Ready(Ok(t)),
+                Poll::Pending => Poll::Pending,
+            },
         }
     }
 }
@@ -78,6 +90,11 @@ impl Spawner {
                 Executor::Tokio => {
                     let handle = tokio::spawn(future);
                     JoinHandle::Tokio(handle)
+                },
+                #[cfg(feature = "smol-compat")]
+                Executor::Smol => {
+                    let task = SmolTask::spawn(future);
+                    JoinHandle::Smol(task)
                 }
             })
         } else {
@@ -130,6 +147,16 @@ mod tests {
                 Ok::<(), SpawnError>(())
             })
         })
+    }
+
+    #[test]
+    fn smol_spawn() {
+        Executor::Smol.run(|| {
+            smol::run(async {
+                let output = Spawner::spawn(async { 2 + 2 }).await.unwrap();
+                assert_eq!(output, 4);
+            });
+        });
     }
 
     #[test]
