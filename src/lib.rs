@@ -10,7 +10,7 @@ use async_executor::Task as AsyncTask;
 #[cfg(feature = "tokio-compat")]
 use tokio::{self, task::JoinHandle as TokioJoinHandle};
 
-#[cfg(feature = "async-executor-compat")]
+#[cfg(feature = "smol-compat")]
 use smol::Task as SmolTask;
 
 pub enum Executor {
