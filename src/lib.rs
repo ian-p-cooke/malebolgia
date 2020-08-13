@@ -1,8 +1,12 @@
-use scoped_tls::scoped_thread_local;
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use strum_macros::Display;
 use thiserror::Error;
+
+#[cfg(test)]
+#[macro_use]
+extern crate rusty_fork;
 
 #[cfg(feature = "async-executor-compat")]
 use async_executor::Task as AsyncExecutorTask;
@@ -15,7 +19,9 @@ use smol::Task as SmolTask;
 
 #[cfg(feature = "async-std-compat")]
 use async_std::task::JoinHandle as AsyncStdJoinHandle;
+use once_cell::sync::OnceCell;
 
+#[derive(Display, Debug, Copy, Clone)]
 pub enum Executor {
     #[cfg(feature = "async-executor-compat")]
     AsyncExecutor,
@@ -27,13 +33,19 @@ pub enum Executor {
     AsyncStd,
 }
 
+static EX: OnceCell<Executor> = OnceCell::new();
+
 impl Executor {
-    pub fn run<T>(&self, f: impl FnOnce() -> T) -> T {
-        EX.set(self, f)
+    pub fn set(self) -> Result<(), SpawnError> {
+        match EX.set(self) {
+            Ok(_) => Ok(()),
+            Err(_) => Err(SpawnError::SingletonError(*EX.get().unwrap())),
+        }
+    }
+    pub fn get() -> Option<Executor> {
+        return EX.get().map(|ex| *ex)
     }
 }
-
-scoped_thread_local!(static EX: Executor);
 
 pub enum JoinHandle<T> {
     #[cfg(feature = "async-executor-compat")]
@@ -50,6 +62,8 @@ pub enum JoinHandle<T> {
 pub enum SpawnError {
     #[error("a task ended with a panic")]
     JoinHandleError(String),
+    #[error("a global executor is already set: {0}")]
+    SingletonError(Executor),
 }
 
 impl<T> Future for JoinHandle<T> {
@@ -91,31 +105,28 @@ impl Spawner {
     where
         T: Send + 'static,
     {
-        if EX.is_set() {
-            EX.with(|ex| match &ex {
-                #[cfg(feature = "async-executor-compat")]
-                Executor::AsyncExecutor => {
-                    let task = AsyncExecutorTask::spawn(future);
-                    JoinHandle::AsyncExecutor(task)
-                },
-                #[cfg(feature = "tokio-compat")]
-                Executor::Tokio => {
-                    let handle = tokio::spawn(future);
-                    JoinHandle::Tokio(handle)
-                },
-                #[cfg(feature = "smol-compat")]
-                Executor::Smol => {
-                    let task = SmolTask::spawn(future);
-                    JoinHandle::Smol(task)
-                },
-                #[cfg(feature = "async-std-compat")]
-                Executor::AsyncStd => {
-                    let handle = async_std::task::spawn(future);
-                    JoinHandle::AsyncStd(handle)
-                }
-            })
-        } else {
-            panic!("Spawner::spawn must be called within the context of Executor::run");
+        match EX.get() {
+            #[cfg(feature = "async-executor-compat")]
+            Some(Executor::AsyncExecutor) => {
+                let task = AsyncExecutorTask::spawn(future);
+                JoinHandle::AsyncExecutor(task)
+            }
+            #[cfg(feature = "tokio-compat")]
+            Some(Executor::Tokio) => {
+                let handle = tokio::spawn(future);
+                JoinHandle::Tokio(handle)
+            }
+            #[cfg(feature = "smol-compat")]
+            Some(Executor::Smol) => {
+                let task = SmolTask::spawn(future);
+                JoinHandle::Smol(task)
+            }
+            #[cfg(feature = "async-std-compat")]
+            Some(Executor::AsyncStd) => {
+                let handle = async_std::task::spawn(future);
+                JoinHandle::AsyncStd(handle)
+            }
+            None => panic!("Spawner::spawn must be called after setting an Executor"),
         }
     }
 
@@ -124,30 +135,25 @@ impl Spawner {
         F: FnOnce() -> T + Send + 'static,
         T: Send + 'static,
     {
-        if EX.is_set() {
-            EX.with(|ex| match &ex {
-                #[cfg(feature = "async-executor-compat")]
-                Executor::AsyncExecutor => {
-                    //async-executor has no native spawn_blocking; using blocking directly
-                    Spawner::spawn(async move { blocking::unblock!(f()) })
-                },
-                #[cfg(feature = "tokio-compat")]
-                Executor::Tokio => {
-                    let handle = tokio::task::spawn_blocking(f);
-                    JoinHandle::Tokio(handle)
-                },
-                #[cfg(feature = "smol-compat")]
-                Executor::Smol => {
-                    Spawner::spawn(async move { smol::unblock!(f()) })
-                },
-                #[cfg(feature = "async-std-compat")]
-                Executor::AsyncStd => {
-                    let handle = async_std::task::spawn_blocking(f);
-                    JoinHandle::AsyncStd(handle)
-                }
-            })
-        } else {
-            panic!("Spawner::spawn_blocking must be called within the context of Executor::run");
+        match EX.get() {
+            #[cfg(feature = "async-executor-compat")]
+            Some(Executor::AsyncExecutor) => {
+                //async-executor has no native spawn_blocking; using blocking directly
+                Spawner::spawn(async move { blocking::unblock!(f()) })
+            }
+            #[cfg(feature = "tokio-compat")]
+            Some(Executor::Tokio) => {
+                let handle = tokio::task::spawn_blocking(f);
+                JoinHandle::Tokio(handle)
+            }
+            #[cfg(feature = "smol-compat")]
+            Some(Executor::Smol) => Spawner::spawn(async move { smol::unblock!(f()) }),
+            #[cfg(feature = "async-std-compat")]
+            Some(Executor::AsyncStd) => {
+                let handle = async_std::task::spawn_blocking(f);
+                JoinHandle::AsyncStd(handle)
+            }
+            None => panic!("Spawner::spawn_blocking must be called after setting an Executor"),
         }
     }
 }
@@ -155,16 +161,16 @@ impl Spawner {
 #[cfg(test)]
 mod tests {
     use crate::{Executor, JoinHandle, SpawnError, Spawner};
+    rusty_fork_test! {
+        #[test]
+        #[should_panic]
+        fn spawn_no_executor_set_fails() {
+            let _ = Spawner::spawn(async { 2 + 2 });
+        }
 
-    #[test]
-    #[should_panic]
-    fn spawn_no_executor_set_fails() {
-        let _ = Spawner::spawn(async { 2 + 2 });
-    }
-
-    #[test]
-    fn async_executor_spawn() -> Result<(), SpawnError> {
-        Executor::AsyncExecutor.run(|| {
+        #[test]
+        fn async_executor_spawn()  {
+            Executor::AsyncExecutor.set().unwrap();
             let ex = async_executor::Executor::new();
             ex.run(async {
                 let handle = Spawner::spawn(async { 2 + 2 });
@@ -176,13 +182,12 @@ mod tests {
                 let output = handle.await?;
                 assert_eq!(output, 4);
                 Ok::<(), SpawnError>(())
-            })
-        })
-    }
+            }).unwrap();
+        }
 
-    #[test]
-    fn tokio_spawn() -> Result<(), SpawnError> {
-        Executor::Tokio.run(|| {
+        #[test]
+        fn tokio_spawn() {
+            Executor::Tokio.set().unwrap();
             let mut ex = tokio::runtime::Runtime::new().unwrap();
             ex.block_on(async {
                 let handle = Spawner::spawn(async { 2 + 2 });
@@ -194,13 +199,12 @@ mod tests {
                 let output = handle.await?;
                 assert_eq!(output, 4);
                 Ok::<(), SpawnError>(())
-            })
-        })
-    }
+            }).unwrap();
+        }
 
-    #[test]
-    fn smol_spawn() -> Result<(), SpawnError> {
-        Executor::Smol.run(|| {
+        #[test]
+        fn smol_spawn() {
+            Executor::Smol.set().unwrap();
             smol::run(async {
                 let handle = Spawner::spawn(async { 2 + 2 });
                 if let JoinHandle::Smol(_) = handle {
@@ -211,13 +215,12 @@ mod tests {
                 let output = handle.await?;
                 assert_eq!(output, 4);
                 Ok::<(), SpawnError>(())
-            })
-        })
-    }
+            }).unwrap();
+        }
 
-    #[test]
-    fn async_std_spawn() -> Result<(), SpawnError> {
-        Executor::AsyncStd.run(|| {
+        #[test]
+        fn async_std_spawn() {
+            Executor::AsyncStd.set().unwrap();
             async_std::task::block_on(async {
                 let handle = Spawner::spawn(async { 2 + 2 });
                 if let JoinHandle::AsyncStd(_) = handle {
@@ -228,29 +231,27 @@ mod tests {
                 let output = handle.await?;
                 assert_eq!(output, 4);
                 Ok::<(), SpawnError>(())
-            })
-        })
-    }
+            }).unwrap();
+        }
 
-    #[test]
-    #[should_panic]
-    fn tokio_cannot_spawn_async_executor() {
-        Executor::Tokio.run(|| {
+        #[test]
+        #[should_panic]
+        fn tokio_cannot_spawn_async_executor() {
+            Executor::Tokio.set().unwrap();
             let ex = async_executor::Executor::new();
             ex.run(async {
                 let _ = Spawner::spawn(async { 2 + 2 });
             });
-        });
-    }
+        }
 
-    #[test]
-    #[should_panic]
-    fn async_executor_cannot_spawn_tokio() {
-        Executor::AsyncExecutor.run(|| {
+        #[test]
+        #[should_panic]
+        fn async_executor_cannot_spawn_tokio() {
+            Executor::AsyncExecutor.set().unwrap();
             let mut ex = tokio::runtime::Runtime::new().unwrap();
             ex.block_on(async {
                 let _ = Spawner::spawn(async { 2 + 2 });
             });
-        });
+        }
     }
 }
