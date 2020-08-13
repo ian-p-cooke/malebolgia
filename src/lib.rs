@@ -97,17 +97,17 @@ impl Spawner {
                 Executor::AsyncExecutor => {
                     let task = AsyncExecutorTask::spawn(future);
                     JoinHandle::AsyncExecutor(task)
-                }
+                },
                 #[cfg(feature = "tokio-compat")]
                 Executor::Tokio => {
                     let handle = tokio::spawn(future);
                     JoinHandle::Tokio(handle)
-                }
+                },
                 #[cfg(feature = "smol-compat")]
                 Executor::Smol => {
                     let task = SmolTask::spawn(future);
                     JoinHandle::Smol(task)
-                }
+                },
                 #[cfg(feature = "async-std-compat")]
                 Executor::AsyncStd => {
                     let handle = async_std::task::spawn(future);
@@ -116,6 +116,38 @@ impl Spawner {
             })
         } else {
             panic!("Spawner::spawn must be called within the context of Executor::run");
+        }
+    }
+
+    pub fn spawn_blocking<F, T>(f: F) -> JoinHandle<T>
+    where
+        F: FnOnce() -> T + Send + 'static,
+        T: Send + 'static,
+    {
+        if EX.is_set() {
+            EX.with(|ex| match &ex {
+                #[cfg(feature = "async-executor-compat")]
+                Executor::AsyncExecutor => {
+                    //async-executor has no native spawn_blocking; using blocking directly
+                    Spawner::spawn(async move { blocking::unblock!(f()) })
+                },
+                #[cfg(feature = "tokio-compat")]
+                Executor::Tokio => {
+                    let handle = tokio::task::spawn_blocking(f);
+                    JoinHandle::Tokio(handle)
+                },
+                #[cfg(feature = "smol-compat")]
+                Executor::Smol => {
+                    Spawner::spawn(async move { smol::unblock!(f()) })
+                },
+                #[cfg(feature = "async-std-compat")]
+                Executor::AsyncStd => {
+                    let handle = async_std::task::spawn_blocking(f);
+                    JoinHandle::AsyncStd(handle)
+                }
+            })
+        } else {
+            panic!("Spawner::spawn_blocking must be called within the context of Executor::run");
         }
     }
 }

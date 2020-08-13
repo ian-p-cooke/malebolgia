@@ -9,12 +9,13 @@ smol = { version = "0.3", default-features = false, optional = true }
 tokio = { version = "0.2", default-features = false, optional = true }
 async-std = { version = "1.6", default-features = false, optional = true }
 async-executor = { version = "0.1", default-features = false, optional = true }
+blocking = { version = "0.5", default-features = false, optional = true }
 scoped-tls = "1.0.0"
 thiserror = "1.0"
 
 [features]
 default = [ "async-executor-compat" ]
 smol-compat = [ "smol", "smol/tokio02" ]
-tokio-compat = [ "tokio", "tokio/rt-core" ]
-async-std-compat = [ "async-std", "async-std/default" ]
-async-executor-compat = [ "async-executor" ]
+tokio-compat = [ "tokio", "tokio/rt-core", "tokio/blocking" ]
+async-std-compat = [ "async-std", "async-std/default", "async-std/unstable" ] #unstable for 'spawn_blocking'
+async-executor-compat = [ "async-executor", "blocking" ]
