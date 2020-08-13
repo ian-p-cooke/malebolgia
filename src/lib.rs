@@ -21,8 +21,18 @@ use smol::Task as SmolTask;
 use async_std::task::JoinHandle as AsyncStdJoinHandle;
 use once_cell::sync::OnceCell;
 
+#[derive(Error, Debug)]
+pub enum SpawnError {
+    #[error("a task ended with a panic")]
+    JoinHandleError(String),
+    #[error("a global executor is already set: {0}")]
+    SingletonError(Executor),
+}
+
+
 #[derive(Display, Debug, Copy, Clone)]
 pub enum Executor {
+    None,
     #[cfg(feature = "async-executor-compat")]
     AsyncExecutor,
     #[cfg(feature = "tokio-compat")]
@@ -48,6 +58,7 @@ impl Executor {
 }
 
 pub enum JoinHandle<T> {
+    None(T),
     #[cfg(feature = "async-executor-compat")]
     AsyncExecutor(AsyncExecutorTask<T>),
     #[cfg(feature = "tokio-compat")]
@@ -58,19 +69,13 @@ pub enum JoinHandle<T> {
     AsyncStd(AsyncStdJoinHandle<T>),
 }
 
-#[derive(Error, Debug)]
-pub enum SpawnError {
-    #[error("a task ended with a panic")]
-    JoinHandleError(String),
-    #[error("a global executor is already set: {0}")]
-    SingletonError(Executor),
-}
-
-impl<T> Future for JoinHandle<T> {
+impl<T: Unpin> Future for JoinHandle<T> {
     type Output = Result<T, SpawnError>;
 
+    #[allow(unused_variables)]
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         match self.get_mut() {
+            JoinHandle::None(_) => panic!("JoinHandle::None cannot be polled!"),
             #[cfg(feature = "async-executor-compat")]
             JoinHandle::AsyncExecutor(t) => match Pin::new(t).poll(cx) {
                 Poll::Ready(output) => Poll::Ready(Ok(output)),
@@ -101,11 +106,16 @@ impl<T> Future for JoinHandle<T> {
 pub struct Spawner;
 
 impl Spawner {
+
+    #[allow(unused_variables)]
     pub fn spawn<T>(future: impl Future<Output = T> + Send + 'static) -> JoinHandle<T>
     where
         T: Send + 'static,
     {
         match EX.get() {
+            Some(Executor::None) => {
+                panic!("Executor::None can not spawn anything");
+            },
             #[cfg(feature = "async-executor-compat")]
             Some(Executor::AsyncExecutor) => {
                 let task = AsyncExecutorTask::spawn(future);
@@ -130,12 +140,16 @@ impl Spawner {
         }
     }
 
+    #[allow(unused_variables)]
     pub fn spawn_blocking<F, T>(f: F) -> JoinHandle<T>
     where
         F: FnOnce() -> T + Send + 'static,
         T: Send + 'static,
     {
         match EX.get() {
+            Some(Executor::None) => {
+                panic!("Executor::None can not spawn anything");
+            },
             #[cfg(feature = "async-executor-compat")]
             Some(Executor::AsyncExecutor) => {
                 //async-executor has no native spawn_blocking; using blocking directly
