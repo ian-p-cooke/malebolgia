@@ -5,13 +5,16 @@ use std::task::{Context, Poll};
 use thiserror::Error;
 
 #[cfg(feature = "async-executor-compat")]
-use async_executor::Task as AsyncTask;
+use async_executor::Task as AsyncExecutorTask;
 
 #[cfg(feature = "tokio-compat")]
 use tokio::{self, task::JoinHandle as TokioJoinHandle};
 
 #[cfg(feature = "smol-compat")]
 use smol::Task as SmolTask;
+
+#[cfg(feature = "async-std-compat")]
+use async_std::task::JoinHandle as AsyncStdJoinHandle;
 
 pub enum Executor {
     #[cfg(feature = "async-executor-compat")]
@@ -20,6 +23,8 @@ pub enum Executor {
     Tokio,
     #[cfg(feature = "smol-compat")]
     Smol,
+    #[cfg(feature = "async-std-compat")]
+    AsyncStd,
 }
 
 impl Executor {
@@ -32,11 +37,13 @@ scoped_thread_local!(static EX: Executor);
 
 pub enum JoinHandle<T> {
     #[cfg(feature = "async-executor-compat")]
-    AsyncExecutor(AsyncTask<T>),
+    AsyncExecutor(AsyncExecutorTask<T>),
     #[cfg(feature = "tokio-compat")]
     Tokio(TokioJoinHandle<T>),
     #[cfg(feature = "smol-compat")]
     Smol(SmolTask<T>),
+    #[cfg(feature = "async-std-compat")]
+    AsyncStd(AsyncStdJoinHandle<T>),
 }
 
 #[derive(Error, Debug)]
@@ -52,7 +59,7 @@ impl<T> Future for JoinHandle<T> {
         match self.get_mut() {
             #[cfg(feature = "async-executor-compat")]
             JoinHandle::AsyncExecutor(t) => match Pin::new(t).poll(cx) {
-                Poll::Ready(t) => Poll::Ready(Ok(t)),
+                Poll::Ready(output) => Poll::Ready(Ok(output)),
                 Poll::Pending => Poll::Pending,
             },
             #[cfg(feature = "tokio-compat")]
@@ -65,7 +72,12 @@ impl<T> Future for JoinHandle<T> {
             },
             #[cfg(feature = "smol-compat")]
             JoinHandle::Smol(t) => match Pin::new(t).poll(cx) {
-                Poll::Ready(t) => Poll::Ready(Ok(t)),
+                Poll::Ready(output) => Poll::Ready(Ok(output)),
+                Poll::Pending => Poll::Pending,
+            },
+            #[cfg(feature = "async-std-compat")]
+            JoinHandle::AsyncStd(handle) => match Pin::new(handle).poll(cx) {
+                Poll::Ready(output) => Poll::Ready(Ok(output)),
                 Poll::Pending => Poll::Pending,
             },
         }
@@ -83,18 +95,23 @@ impl Spawner {
             EX.with(|ex| match &ex {
                 #[cfg(feature = "async-executor-compat")]
                 Executor::AsyncExecutor => {
-                    let task = AsyncTask::spawn(future);
+                    let task = AsyncExecutorTask::spawn(future);
                     JoinHandle::AsyncExecutor(task)
                 }
                 #[cfg(feature = "tokio-compat")]
                 Executor::Tokio => {
                     let handle = tokio::spawn(future);
                     JoinHandle::Tokio(handle)
-                },
+                }
                 #[cfg(feature = "smol-compat")]
                 Executor::Smol => {
                     let task = SmolTask::spawn(future);
                     JoinHandle::Smol(task)
+                }
+                #[cfg(feature = "async-std-compat")]
+                Executor::AsyncStd => {
+                    let handle = async_std::task::spawn(future);
+                    JoinHandle::AsyncStd(handle)
                 }
             })
         } else {
@@ -150,13 +167,37 @@ mod tests {
     }
 
     #[test]
-    fn smol_spawn() {
+    fn smol_spawn() -> Result<(), SpawnError> {
         Executor::Smol.run(|| {
             smol::run(async {
-                let output = Spawner::spawn(async { 2 + 2 }).await.unwrap();
+                let handle = Spawner::spawn(async { 2 + 2 });
+                if let JoinHandle::Smol(_) = handle {
+                    //pass
+                } else {
+                    panic!("wrong join handle!");
+                }
+                let output = handle.await?;
                 assert_eq!(output, 4);
-            });
-        });
+                Ok::<(), SpawnError>(())
+            })
+        })
+    }
+
+    #[test]
+    fn async_std_spawn() -> Result<(), SpawnError> {
+        Executor::AsyncStd.run(|| {
+            async_std::task::block_on(async {
+                let handle = Spawner::spawn(async { 2 + 2 });
+                if let JoinHandle::AsyncStd(_) = handle {
+                    //pass
+                } else {
+                    panic!("wrong join handle!");
+                }
+                let output = handle.await?;
+                assert_eq!(output, 4);
+                Ok::<(), SpawnError>(())
+            })
+        })
     }
 
     #[test]
