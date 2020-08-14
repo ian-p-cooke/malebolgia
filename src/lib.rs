@@ -29,7 +29,6 @@ pub enum SpawnError {
     SingletonError(Executor),
 }
 
-
 #[derive(Display, Debug, Copy, Clone)]
 pub enum Executor {
     None,
@@ -53,7 +52,7 @@ impl Executor {
         }
     }
     pub fn get() -> Option<Executor> {
-        return EX.get().map(|ex| *ex)
+        return EX.get().map(|ex| *ex);
     }
 }
 
@@ -106,7 +105,6 @@ impl<T: Unpin> Future for JoinHandle<T> {
 pub struct Spawner;
 
 impl Spawner {
-
     #[allow(unused_variables)]
     pub fn spawn<T>(future: impl Future<Output = T> + Send + 'static) -> JoinHandle<T>
     where
@@ -115,7 +113,7 @@ impl Spawner {
         match EX.get() {
             Some(Executor::None) => {
                 panic!("Executor::None can not spawn anything");
-            },
+            }
             #[cfg(feature = "async-executor-compat")]
             Some(Executor::AsyncExecutor) => {
                 let task = AsyncExecutorTask::spawn(future);
@@ -149,7 +147,7 @@ impl Spawner {
         match EX.get() {
             Some(Executor::None) => {
                 panic!("Executor::None can not spawn anything");
-            },
+            }
             #[cfg(feature = "async-executor-compat")]
             Some(Executor::AsyncExecutor) => {
                 //async-executor has no native spawn_blocking; using blocking directly
