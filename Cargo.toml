@@ -19,7 +19,7 @@ strum_macros = "0.19"
 rusty-fork = "0.3.0"
 
 [features]
-default = [ "async-executor-compat" ]
+default = [ ]
 smol-compat = [ "smol", "smol/tokio02" ]
 tokio-compat = [ "tokio", "tokio/rt-core", "tokio/blocking" ]
 async-std-compat = [ "async-std", "async-std/default", "async-std/unstable" ] #unstable for 'spawn_blocking'
