@@ -52,7 +52,7 @@ impl Executor {
         }
     }
     pub fn get() -> Option<Executor> {
-        return EX.get().map(|ex| *ex);
+        EX.get().map(|ex| *ex)
     }
 }
 
