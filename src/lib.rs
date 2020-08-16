@@ -24,9 +24,12 @@ use smol::Task as SmolTask;
 use async_std::task::JoinHandle as AsyncStdJoinHandle;
 
 use once_cell::sync::OnceCell;
-
+k
 #[cfg(feature = "futures-compat")]
-use futures::{executor::ThreadPool, future::RemoteHandle, FutureExt};
+use futures::{executor::ThreadPool, future::RemoteHandle};
+
+#[cfg(any(feature="tokio-compat", feature="futures-compat"))]
+use futures::FutureExt;
 
 #[derive(Error, Debug)]
 pub enum SpawnError {
@@ -247,7 +250,7 @@ impl Spawner {
                 let handle = async_std::task::spawn_blocking(f);
                 JoinHandle::AsyncStd(handle)
             }
-            #[cfg(feature = "futures")]
+            #[cfg(feature = "futures-compat")]
             Some(Executor::Futures(_)) => Spawner::spawn(async move { blocking::unblock!(f()) }),
             None => panic!("Spawner::spawn_blocking must be called after setting an Executor"),
         }
