@@ -1,5 +1,5 @@
 [package]
-name = "maelbolgia"
+name = "malebolgia"
 version = "0.3.0"
 authors = ["Ian P. Cooke <ipc@informatic.io>"]
 edition = "2018"

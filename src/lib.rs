@@ -14,7 +14,7 @@ use async_executor::Task as AsyncExecutorTask;
 #[cfg(feature = "tokio-compat")]
 use tokio::{self, task::JoinHandle as TokioJoinHandle};
 
-#[cfg(feature = "tokio-compat")]
+#[cfg(any(feature = "tokio-compat", feature="futures-compat"))]
 use futures::future::{AbortHandle, Abortable};
 
 #[cfg(feature = "smol-compat")]
@@ -257,7 +257,8 @@ impl Spawner {
 #[cfg(test)]
 mod tests {
     use crate::{Executor, JoinHandle, SpawnError, Spawner};
-    use futures::executor::{ThreadPool, ThreadPoolBuilder};
+    use futures::executor::ThreadPool;
+
     rusty_fork_test! {
         #[test]
         #[should_panic]
