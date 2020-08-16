@@ -14,22 +14,29 @@ use async_executor::Task as AsyncExecutorTask;
 #[cfg(feature = "tokio-compat")]
 use tokio::{self, task::JoinHandle as TokioJoinHandle};
 
+#[cfg(feature = "tokio-compat")]
+use futures::future::{AbortHandle, Abortable};
+
 #[cfg(feature = "smol-compat")]
 use smol::Task as SmolTask;
 
 #[cfg(feature = "async-std-compat")]
 use async_std::task::JoinHandle as AsyncStdJoinHandle;
+
 use once_cell::sync::OnceCell;
+
+#[cfg(feature = "futures-compat")]
+use futures::{executor::ThreadPool, future::RemoteHandle, FutureExt};
 
 #[derive(Error, Debug)]
 pub enum SpawnError {
     #[error("a task ended with a panic")]
     JoinHandleError(String),
-    #[error("a global executor is already set: {0}")]
-    SingletonError(Executor),
+    #[error("a global executor is already set")]
+    SingletonError,
 }
 
-#[derive(Display, Debug, Copy, Clone)]
+#[derive(Display, Debug)]
 pub enum Executor {
     None,
     #[cfg(feature = "async-executor-compat")]
@@ -40,6 +47,8 @@ pub enum Executor {
     Smol,
     #[cfg(feature = "async-std-compat")]
     AsyncStd,
+    #[cfg(feature = "futures-compat")]
+    Futures(ThreadPool),
 }
 
 static EX: OnceCell<Executor> = OnceCell::new();
@@ -48,11 +57,11 @@ impl Executor {
     pub fn set(self) -> Result<(), SpawnError> {
         match EX.set(self) {
             Ok(_) => Ok(()),
-            Err(_) => Err(SpawnError::SingletonError(*EX.get().unwrap())),
+            Err(_) => Err(SpawnError::SingletonError),
         }
     }
-    pub fn get() -> Option<Executor> {
-        EX.get().map(|ex| *ex)
+    pub fn get() -> Option<&'static Executor> {
+        EX.get()
     }
 }
 
@@ -61,14 +70,16 @@ pub enum JoinHandle<T> {
     #[cfg(feature = "async-executor-compat")]
     AsyncExecutor(AsyncExecutorTask<T>),
     #[cfg(feature = "tokio-compat")]
-    Tokio(TokioJoinHandle<T>),
+    Tokio((TokioJoinHandle<T>, Option<AbortHandle>)),
     #[cfg(feature = "smol-compat")]
     Smol(SmolTask<T>),
     #[cfg(feature = "async-std-compat")]
     AsyncStd(AsyncStdJoinHandle<T>),
+    #[cfg(feature = "futures-compat")]
+    Futures((RemoteHandle<T>, Option<AbortHandle>)),
 }
 
-impl<T: Unpin> Future for JoinHandle<T> {
+impl<T: Unpin + 'static> Future for JoinHandle<T> {
     type Output = Result<T, SpawnError>;
 
     #[allow(unused_variables)]
@@ -76,13 +87,13 @@ impl<T: Unpin> Future for JoinHandle<T> {
         match self.get_mut() {
             JoinHandle::None(_) => panic!("JoinHandle::None cannot be polled!"),
             #[cfg(feature = "async-executor-compat")]
-            JoinHandle::AsyncExecutor(t) => match Pin::new(t).poll(cx) {
+            JoinHandle::AsyncExecutor(task) => match Pin::new(task).poll(cx) {
                 Poll::Ready(output) => Poll::Ready(Ok(output)),
                 Poll::Pending => Poll::Pending,
             },
             #[cfg(feature = "tokio-compat")]
-            JoinHandle::Tokio(t) => match Pin::new(t).poll(cx) {
-                Poll::Ready(r) => match r {
+            JoinHandle::Tokio((handle, _)) => match Pin::new(handle).poll(cx) {
+                Poll::Ready(result) => match result {
                     Ok(output) => Poll::Ready(Ok(output)),
                     Err(e) => Poll::Ready(Err(SpawnError::JoinHandleError(e.to_string()))),
                 },
@@ -98,6 +109,65 @@ impl<T: Unpin> Future for JoinHandle<T> {
                 Poll::Ready(output) => Poll::Ready(Ok(output)),
                 Poll::Pending => Poll::Pending,
             },
+            #[cfg(feature = "futures-compat")]
+            JoinHandle::Futures((handle, _)) => match Pin::new(handle).poll(cx) {
+                Poll::Ready(output) => Poll::Ready(Ok(output)),
+                Poll::Pending => Poll::Pending,
+            },
+        }
+    }
+}
+
+unsafe impl<T: Send> Send for JoinHandle<T> {}
+unsafe impl<T: Sync> Sync for JoinHandle<T> {}
+impl<T> Unpin for JoinHandle<T> {}
+
+impl<T: 'static> JoinHandle<T> {
+    pub fn detach(self) {
+        match self {
+            JoinHandle::None(_) => panic!("you can not detatch JoinHandle::None!"),
+            #[cfg(feature = "tokio-compat")]
+            JoinHandle::Tokio((handle, _)) => drop(handle),
+            #[cfg(feature = "smol-compat")]
+            JoinHandle::Smol(task) => task.detach(),
+            #[cfg(feature = "async-std-compat")]
+            JoinHandle::AsyncStd(handle) => drop(handle),
+            #[cfg(feature = "async-executor-compat")]
+            JoinHandle::AsyncExecutor(task) => task.detach(),
+            #[cfg(feature = "futures-compat")]
+            JoinHandle::Futures((handle, _)) => handle.forget(),
+        }
+    }
+    pub async fn cancel(self) -> Option<T> {
+        match self {
+            JoinHandle::None(_) => panic!("you can not detatch JoinHandle::None!"),
+            #[cfg(feature = "tokio-compat")]
+            JoinHandle::Tokio((handle, abort_handle)) => {
+                let maybe_output = handle.now_or_never();
+                let output = if let Some(Ok(output)) = maybe_output {
+                    Some(output)
+                } else {
+                    None
+                };
+                if let Some(abort_handle) = abort_handle {
+                    abort_handle.abort();
+                }
+                output
+            }
+            #[cfg(feature = "smol-compat")]
+            JoinHandle::Smol(task) => task.cancel().await,
+            #[cfg(feature = "async-std-compat")]
+            JoinHandle::AsyncStd(handle) => handle.cancel().await,
+            #[cfg(feature = "async-executor-compat")]
+            JoinHandle::AsyncExecutor(task) => task.cancel().await,
+            #[cfg(feature = "futures-compat")]
+            JoinHandle::Futures((handle, abort_handle)) => {
+                let output = handle.now_or_never();
+                if let Some(abort_handle) = abort_handle {
+                    abort_handle.abort();
+                }
+                output
+            }
         }
     }
 }
@@ -121,8 +191,11 @@ impl Spawner {
             }
             #[cfg(feature = "tokio-compat")]
             Some(Executor::Tokio) => {
+                let (abort_handle, abort_registration) = AbortHandle::new_pair();
+                let future = Abortable::new(future, abort_registration);
+                let future = async move { future.await.unwrap() };
                 let handle = tokio::spawn(future);
-                JoinHandle::Tokio(handle)
+                JoinHandle::Tokio((handle, Some(abort_handle)))
             }
             #[cfg(feature = "smol-compat")]
             Some(Executor::Smol) => {
@@ -133,6 +206,15 @@ impl Spawner {
             Some(Executor::AsyncStd) => {
                 let handle = async_std::task::spawn(future);
                 JoinHandle::AsyncStd(handle)
+            }
+            #[cfg(feature = "futures-compat")]
+            Some(Executor::Futures(thread_pool)) => {
+                let (abort_handle, abort_registration) = AbortHandle::new_pair();
+                let future = Abortable::new(future, abort_registration);
+                let future = async move { future.await.unwrap() };
+                let (future, handle) = future.remote_handle();
+                thread_pool.spawn_ok(future);
+                JoinHandle::Futures((handle, Some(abort_handle)))
             }
             None => panic!("Spawner::spawn must be called after setting an Executor"),
         }
@@ -156,7 +238,7 @@ impl Spawner {
             #[cfg(feature = "tokio-compat")]
             Some(Executor::Tokio) => {
                 let handle = tokio::task::spawn_blocking(f);
-                JoinHandle::Tokio(handle)
+                JoinHandle::Tokio((handle, None))
             }
             #[cfg(feature = "smol-compat")]
             Some(Executor::Smol) => Spawner::spawn(async move { smol::unblock!(f()) }),
@@ -165,6 +247,8 @@ impl Spawner {
                 let handle = async_std::task::spawn_blocking(f);
                 JoinHandle::AsyncStd(handle)
             }
+            #[cfg(feature = "futures")]
+            Some(Executor::Futures(_)) => Spawner::spawn(async move { blocking::unblock!(f()) }),
             None => panic!("Spawner::spawn_blocking must be called after setting an Executor"),
         }
     }
@@ -173,6 +257,7 @@ impl Spawner {
 #[cfg(test)]
 mod tests {
     use crate::{Executor, JoinHandle, SpawnError, Spawner};
+    use futures::executor::{ThreadPool, ThreadPoolBuilder};
     rusty_fork_test! {
         #[test]
         #[should_panic]
@@ -236,6 +321,24 @@ mod tests {
             async_std::task::block_on(async {
                 let handle = Spawner::spawn(async { 2 + 2 });
                 if let JoinHandle::AsyncStd(_) = handle {
+                    //pass
+                } else {
+                    panic!("wrong join handle!");
+                }
+                let output = handle.await?;
+                assert_eq!(output, 4);
+                Ok::<(), SpawnError>(())
+            }).unwrap();
+        }
+
+        #[test]
+        fn futures_spawn() {
+            let ex = ThreadPool::new().unwrap();
+            Executor::Futures(ex).set().unwrap();
+
+            futures::executor::block_on( async move {
+                let handle = Spawner::spawn(async { 2 + 2 });
+                if let JoinHandle::Futures(_) = handle {
                     //pass
                 } else {
                     panic!("wrong join handle!");
