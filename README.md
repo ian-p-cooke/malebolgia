@@ -27,22 +27,20 @@ In a library:
 
 use malebolgia::Spawner;
 
-impl KeyProcessor {
-    async fn process_keys(keys: Vec<&str>) -> Result<(), Error> {
-        let mut fetch_tasks = Vec::with_capacity(keys.len());
-        for key in keys {
-            let task = async move {
-                // process key
-                Ok::<(), Error>(())
-            };
-            fetch_tasks.push(Spawner::spawn(task));
-        }
-
-        for task in fetch_tasks.drain(..) {
-            task.await??;
-        }
-        Ok(())
+async fn process(keys: Vec<&str>) -> Result<(), Error> {
+    let mut fetch_tasks = Vec::with_capacity(keys.len());
+    for key in keys {
+        let task = async move {
+            // process key
+            Ok::<(), Error>(())
+        };
+        fetch_tasks.push(Spawner::spawn(task));
     }
+
+    for task in fetch_tasks.drain(..) {
+        task.await??;
+    }
+    Ok(())
 }
 ```
 
@@ -55,10 +53,9 @@ use malebolgia::Executor;
 async fn main() -> Result<(), Error> {
     Executor::Tokio.set()?;
 
-    let processor = KeyProcessor;
     let keys = vec!["a", "b", "c"];
   
-    processor::process_keys(keys).await?;
+    KeyProcessor::process(keys).await?;
 
     Ok(())
 }
