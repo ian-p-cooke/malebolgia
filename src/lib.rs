@@ -24,7 +24,7 @@ use smol::Task as SmolTask;
 use async_std::task::JoinHandle as AsyncStdJoinHandle;
 
 use once_cell::sync::OnceCell;
-k
+
 #[cfg(feature = "futures-compat")]
 use futures::{executor::ThreadPool, future::RemoteHandle};
 
