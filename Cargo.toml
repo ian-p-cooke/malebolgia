@@ -21,7 +21,7 @@ rusty-fork = "0.3.0"
 
 [features]
 default = [ ]
-smol-compat = [ "smol", "smol/tokio02" ]
+smol-compat = [ "smol" ]
 tokio-compat = [ "tokio", "tokio/rt-core", "tokio/blocking", "futures" ]
 async-std-compat = [ "async-std", "async-std/default", "async-std/unstable" ] #unstable for 'spawn_blocking'
 async-executor-compat = [ "async-executor", "blocking" ]
