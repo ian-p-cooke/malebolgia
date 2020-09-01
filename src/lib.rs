@@ -217,7 +217,7 @@ impl Spawner {
             }
             #[cfg(feature = "smol-compat")]
             Some(Executor::Smol) => {
-                let task = SmolTask::spawn(future);
+                let task = smol::spawn(future);
                 JoinHandle::Smol(task)
             }
             #[cfg(feature = "async-std-compat")]
@@ -259,7 +259,7 @@ impl Spawner {
                 JoinHandle::Tokio((handle, None))
             }
             #[cfg(feature = "smol-compat")]
-            Some(Executor::Smol) => Spawner::spawn(async move { smol::unblock!(f()) }),
+            Some(Executor::Smol) => Spawner::spawn(smol::unblock(f)),
             #[cfg(feature = "async-std-compat")]
             Some(Executor::AsyncStd) => {
                 let handle = async_std::task::spawn_blocking(f);
@@ -372,7 +372,7 @@ mod tests {
     #[test]
     fn smol_spawn() {
         Executor::Smol.set().unwrap();
-        smol::run(async {
+        smol::block_on(async {
             let handle = Spawner::spawn(async { 2 + 2 });
             if let JoinHandle::Smol(_) = handle {
                 //pass
@@ -473,13 +473,13 @@ mod tests {
     #[test]
     fn cancel_smol_none() {
         Executor::Smol.set().unwrap();
-        smol::run(cancel_test_none()).unwrap();
+        smol::block_on(cancel_test_none()).unwrap();
     }
 
     #[test]
     fn cancel_smol_executor_some() {
         Executor::Smol.set().unwrap();
-        smol::run(cancel_test_some()).unwrap();
+        smol::block_on(cancel_test_some()).unwrap();
     }
 
     #[test]
@@ -513,7 +513,7 @@ mod tests {
     #[test]
     fn detach_smol() {
         Executor::Smol.set().unwrap();
-        smol::run(detach_test()).unwrap();
+        smol::block_on(detach_test()).unwrap();
     }
 
     #[test]

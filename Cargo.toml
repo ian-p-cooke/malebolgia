@@ -1,11 +1,11 @@
 [package]
 name = "malebolgia"
-version = "0.3.0"
+version = "0.4.0"
 authors = ["Ian P. Cooke <ipc@informatic.io>"]
 edition = "2018"
 
 [dependencies]
-smol = { version = "0.3", default-features = false, optional = true }
+smol = { version = "0.4", default-features = false, optional = true }
 tokio = { version = "0.2", default-features = false, optional = true }
 async-std = { version = "1.6", default-features = false, optional = true }
 async-executor = { version = "0.1", default-features = false, optional = true }
