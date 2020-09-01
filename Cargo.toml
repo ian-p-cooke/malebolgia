@@ -1,6 +1,6 @@
 [package]
 name = "malebolgia"
-version = "0.4.0"
+version = "0.5.0"
 authors = ["Ian P. Cooke <ipc@informatic.io>"]
 edition = "2018"
 
@@ -8,8 +8,7 @@ edition = "2018"
 smol = { version = "0.4", default-features = false, optional = true }
 tokio = { version = "0.2", default-features = false, optional = true }
 async-std = { version = "1.6", default-features = false, optional = true }
-async-executor = { version = "0.1", default-features = false, optional = true }
-blocking = { version = "0.5", default-features = false, optional = true }
+blocking = { version = "0.6", default-features = false, optional = true }
 futures = { version = "0.3.5", default-features = false, optional = true }
 once_cell = "1.4.0"
 thiserror = "1.0"
@@ -26,5 +25,4 @@ default = [ ]
 smol-compat = [ "smol" ]
 tokio-compat = [ "tokio", "tokio/rt-core", "tokio/blocking", "futures" ]
 async-std-compat = [ "async-std", "async-std/default", "async-std/unstable" ] #unstable for 'spawn_blocking'
-async-executor-compat = [ "async-executor", "blocking" ]
 futures-compat = [ "futures", "futures/executor", "futures/thread-pool" ]

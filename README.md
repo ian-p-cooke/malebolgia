@@ -68,10 +68,9 @@ In order to use malebolgia in a test or an application you MUST select a feature
 
 ```toml
 [dependencies]
-malebolgia = { version = "0.3", features = ["tokio-compat"] }
+malebolgia = { version = "0.4", features = ["tokio-compat"] }
 ```
 
- * [async-executor](https://docs.rs/async-executor)
  * [async-std](https://docs.rs/async-std)
  * [futures](https://docs.rs/futures)
  * [smol](https://docs.rs/smol)

@@ -8,9 +8,6 @@ use thiserror::Error;
 #[macro_use]
 extern crate rusty_fork;
 
-#[cfg(feature = "async-executor-compat")]
-use async_executor::Task as AsyncExecutorTask;
-
 #[cfg(feature = "tokio-compat")]
 use tokio::{self, task::JoinHandle as TokioJoinHandle};
 
@@ -42,8 +39,6 @@ pub enum SpawnError {
 #[derive(Display, Debug)]
 pub enum Executor {
     None,
-    #[cfg(feature = "async-executor-compat")]
-    AsyncExecutor,
     #[cfg(feature = "tokio-compat")]
     Tokio,
     #[cfg(feature = "smol-compat")]
@@ -70,8 +65,6 @@ impl Executor {
 
 pub enum JoinHandle<T> {
     None(T),
-    #[cfg(feature = "async-executor-compat")]
-    AsyncExecutor(AsyncExecutorTask<T>),
     #[cfg(feature = "tokio-compat")]
     Tokio((TokioJoinHandle<T>, Option<AbortHandle>)),
     #[cfg(feature = "smol-compat")]
@@ -89,11 +82,6 @@ impl<T: Unpin + 'static> Future for JoinHandle<T> {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         match self.get_mut() {
             JoinHandle::None(_) => panic!("JoinHandle::None cannot be polled!"),
-            #[cfg(feature = "async-executor-compat")]
-            JoinHandle::AsyncExecutor(task) => match Pin::new(task).poll(cx) {
-                Poll::Ready(output) => Poll::Ready(Ok(output)),
-                Poll::Pending => Poll::Pending,
-            },
             #[cfg(feature = "tokio-compat")]
             JoinHandle::Tokio((handle, _)) => match Pin::new(handle).poll(cx) {
                 Poll::Ready(result) => match result {
@@ -135,8 +123,6 @@ impl<T: 'static> JoinHandle<T> {
             JoinHandle::Smol(task) => task.detach(),
             #[cfg(feature = "async-std-compat")]
             JoinHandle::AsyncStd(handle) => drop(handle),
-            #[cfg(feature = "async-executor-compat")]
-            JoinHandle::AsyncExecutor(task) => task.detach(),
             #[cfg(feature = "futures-compat")]
             JoinHandle::Futures((handle, _)) => handle.forget(),
         }
@@ -170,8 +156,6 @@ impl<T: 'static> JoinHandle<T> {
             JoinHandle::Smol(task) => task.cancel().await,
             #[cfg(feature = "async-std-compat")]
             JoinHandle::AsyncStd(handle) => handle.cancel().await,
-            #[cfg(feature = "async-executor-compat")]
-            JoinHandle::AsyncExecutor(task) => task.cancel().await,
             #[cfg(feature = "futures-compat")]
             JoinHandle::Futures((handle, abort_handle)) => {
                 match abort_handle {
@@ -201,11 +185,6 @@ impl Spawner {
         match EX.get() {
             Some(Executor::None) => {
                 panic!("Executor::None can not spawn anything");
-            }
-            #[cfg(feature = "async-executor-compat")]
-            Some(Executor::AsyncExecutor) => {
-                let task = AsyncExecutorTask::spawn(future);
-                JoinHandle::AsyncExecutor(task)
             }
             #[cfg(feature = "tokio-compat")]
             Some(Executor::Tokio) => {
@@ -248,11 +227,6 @@ impl Spawner {
             Some(Executor::None) => {
                 panic!("Executor::None can not spawn anything");
             }
-            #[cfg(feature = "async-executor-compat")]
-            Some(Executor::AsyncExecutor) => {
-                //async-executor has no native spawn_blocking; using blocking directly
-                Spawner::spawn(async move { blocking::unblock!(f()) })
-            }
             #[cfg(feature = "tokio-compat")]
             Some(Executor::Tokio) => {
                 let handle = tokio::task::spawn_blocking(f);
@@ -266,7 +240,7 @@ impl Spawner {
                 JoinHandle::AsyncStd(handle)
             }
             #[cfg(feature = "futures-compat")]
-            Some(Executor::Futures(_)) => Spawner::spawn(async move { blocking::unblock!(f()) }),
+            Some(Executor::Futures(_)) => Spawner::spawn(blocking::unblock(f)),
             None => panic!("Spawner::spawn_blocking must be called after setting an Executor"),
         }
     }
@@ -331,24 +305,6 @@ mod tests {
     #[should_panic]
     fn spawn_no_executor_set_fails() {
         let _ = Spawner::spawn(async { 2 + 2 });
-    }
-
-    #[test]
-    fn async_executor_spawn() {
-        Executor::AsyncExecutor.set().unwrap();
-        let ex = async_executor::Executor::new();
-        ex.run(async {
-            let handle = Spawner::spawn(async { 2 + 2 });
-            if let JoinHandle::AsyncExecutor(_) = handle {
-                //pass
-            } else {
-                panic!("wrong join handle!");
-            }
-            let output = handle.await?;
-            assert_eq!(output, 4);
-            Ok::<(), SpawnError>(())
-        })
-        .unwrap();
     }
 
     #[test]
@@ -424,36 +380,11 @@ mod tests {
 
     #[test]
     #[should_panic]
-    fn tokio_cannot_spawn_async_executor() {
+    fn tokio_cannot_spawn_smol_executor() {
         Executor::Tokio.set().unwrap();
-        let ex = async_executor::Executor::new();
-        ex.run(async {
+        smol::block_on(async {
             let _ = Spawner::spawn(async { 2 + 2 });
         });
-    }
-
-    #[test]
-    #[should_panic]
-    fn async_executor_cannot_spawn_tokio() {
-        Executor::AsyncExecutor.set().unwrap();
-        let mut ex = tokio::runtime::Runtime::new().unwrap();
-        ex.block_on(async {
-            let _ = Spawner::spawn(async { 2 + 2 });
-        });
-    }
-
-    #[test]
-    fn cancel_async_executor_none() {
-        Executor::AsyncExecutor.set().unwrap();
-        let ex = async_executor::Executor::new();
-
-        ex.run(cancel_test_none()).unwrap();
-    }
-    #[test]
-    fn cancel_async_executor_some() {
-        Executor::AsyncExecutor.set().unwrap();
-        let ex = async_executor::Executor::new();
-        ex.run(cancel_test_some()).unwrap();
     }
 
     #[test]
@@ -465,9 +396,9 @@ mod tests {
 
     #[test]
     fn cancel_tokio_executor_some() {
-        Executor::AsyncExecutor.set().unwrap();
-        let ex = async_executor::Executor::new();
-        ex.run(cancel_test_some()).unwrap();
+        Executor::Tokio.set().unwrap();
+        let mut ex = tokio::runtime::Runtime::new().unwrap();
+        ex.block_on(cancel_test_some()).unwrap();
     }
 
     #[test]
@@ -494,13 +425,6 @@ mod tests {
         let ex = ThreadPool::new().unwrap();
         Executor::Futures(ex).set().unwrap();
         futures::executor::block_on(cancel_test_some()).unwrap();
-    }
-
-    #[test]
-    fn detach_async_executor() {
-        Executor::AsyncExecutor.set().unwrap();
-        let ex = async_executor::Executor::new();
-        ex.run(detach_test()).unwrap();
     }
 
     #[test]
